@@ -1,0 +1,19 @@
+# Ignore Python virtual environment
+venv/
+TUFvenv/
+
+# Bytecode
+__pycache__/
+*.py[cod]
+
+# VSCode settings (if used)
+.vscode/
+
+# OS files
+.DS_Store
+
+# Logs or compiled data
+*.log
+
+# Jupyter/IPython
+.ipynb_checkpoints/
