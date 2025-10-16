@@ -41,7 +41,9 @@ data_path = config["data_path"]
 logging.basicConfig(
     level=logging.DEBUG,  # show everything, including debug()
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    stream=sys.stdout      # send to standard output
+    #stream=sys.stdout # send to standard output
+    filename=config["log_file"],  # full path to log file
+    filemode="a"  # append mode (use 'w' to overwrite each run)
 )
 
 #Create a module-level logger
@@ -113,38 +115,50 @@ app.index_string = """
 app.layout = build_layout(baseKeys, functionKeys, composite_keys, action_keys)
 
 #-----------callback callled after modbus write----------------
-@register_callback("on_write_done")
-def on_write_done(task_id, value, timestamp, **kwargs):
+@register_callback("record_and_log")
+def record_and_log(task_id, value, timestamp, **kwargs):
+    missing = [k for k in ( "target_id","file") if kwargs.get(k) is None]
+    label = kwargs.get("label")
+    if missing:
+        logger.error(f"[record_and_log] Missing parameters {missing} for task id '{task_id}'")
+        return "inactive"
     target_id = kwargs.get("target_id")
-    logger.debug(f"; on_write_done: task_id={task_id},timestamp:{timestamp},target_id= {target_id},value={value}")
+    file = kwargs.get("file")
+    logger.debug(f"; record_and_log: task_id={task_id},timestamp:{timestamp},target_id= {target_id},value={value},file:{file}")
     
     ## write data to a task specific log file
     try:
-        log_dir = "logs"
         os.makedirs(data_path, exist_ok=True)
-        file_path = os.path.join(data_path, f"{task_id}")
+        file_path = os.path.join(data_path, f"{file}")
 
         with open(file_path, "a", encoding="utf-8") as f:
             f.write(f"{timestamp},{value}\n")
 
     except Exception as e:
         logger.error(f"Failed to write data for task {task_id}: {e}")
-        
-    #now send status line to be displayed in the browser
+
+    log_to_browser(task_id, value, timestamp, **kwargs)
+
+
+@register_callback("log_to_browser")
+def log_to_browser(task_id, value, timestamp, **kwargs):
+    target_id = kwargs.get("target_id")
+    logger.debug(f"; log_to_browser: task_id={task_id},timestamp:{timestamp},target_id= {target_id},value={value}")
+    # now send status line to be displayed in the browser
     message = {
         "target_id": target_id,
         "content": f"[task:{task_id}--{timestamp}] Modbus result: {value}"
     }
     # Send this to the client (frontend) through a socket
     socketio.emit("update_element", message)
-    
 #--------------record action; create or stop task------------------------
 def record_action(index, **params):
 
     # Validate required params
-    missing = [k for k in ("label","addr", "nbReg", "format", "recurrence") if params.get(k) is None]
+    required = ("label", "addr", "nbReg", "format", "recurrence")
+    missing = [k for k in required if params.get(k) is None]
     if missing:
-        logger.error(f"[record_action] Missing parameters {missing} for button '{label}'")
+        logger.error(f"[record_action] Missing parameters {missing} for record button '{index}'")
         return "inactive"
     label = params.get("label", f"button_{index}")
     addr = params.get("addr")
@@ -161,6 +175,8 @@ def record_action(index, **params):
         return "inactive"
 
     # Start a new recording task
+    # all params except the required ones
+    extra_params = {k: v for k, v in params.items() if k not in required}
     task = Task(
         task_id=task_id,
         modbus_param={
@@ -170,11 +186,12 @@ def record_action(index, **params):
             "format": format
         },
         recurrence=float(recurrence),
-        callback=on_write_done,
-        parameters={"target_id": f"status_{index}"}
+        callback=record_and_log,
+        parameters={"target_id": f"status_{index}"}|extra_params
     )
     worker.create_task(task)
-    logger.info(f"[record_action] Started recording: {label}")
+    logger.debug(f"[record_action] created task: {task_id}; parameters:{task.parameters}")
+    logger.info (f"[record_action] Started recording: {label}")
     return "active"
 #-----------callback to delete a record file------------------
 def deleteFile_action(index, **params):
@@ -222,7 +239,7 @@ def on_base_or_function_key_press(n_clicks):
     task = Task(
         task_id=f"write_{group}_{index}",
         modbus_param={"op": "write", "addr": reg-1, "value": val},
-        callback=on_write_done,
+        callback=log_to_browser,
         parameters={"target_id": "response"},  # element to update
     )
     worker.create_task(task)
@@ -248,7 +265,7 @@ def on_composite_key_pressed(n_clicks):
             task = Task(
                 task_id=f"write_{index}",
                 modbus_param={"op": "write", "addr": reg- 1, "value": val},
-                callback=on_write_done,
+                callback=log_to_browser,
                 parameters={"target_id": "response"},  # element to update
             )
             worker.create_task(task)

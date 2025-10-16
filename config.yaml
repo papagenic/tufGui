@@ -1,5 +1,6 @@
 # config.yaml
 data_path: "/var/log/TUF2000/"
+log_file: "/var/log/TUF2000/tuf2000.log"
 
 serial:
   port: "/dev/ttyUSB0"
@@ -27,24 +28,30 @@ base_keys:
   - {label: ".", reg: 59, val: 58}
 
 function_keys:
-  - {label: "Pipe ext Diam", reg: 60, val: 17}
-  - {label: "Pipe Thickness", reg: 60, val: 18}
-  - {label: "Pipe material", reg: 60, val: 20}
+  - {label: "sh Pipe ext Diam", reg: 60, val: 17}
+  - {label: "sh Pipe Thickness", reg: 60, val: 18}
+  - {label: "sh Pipe material", reg: 60, val: 20}
+  - {label: "sh spacing", reg: 60, val: 37}
+  - {label: "sh Pipe material", reg: 60, val: 20}
+  - {label: "sh fluid", reg: 60, val: 32}
+  - {label: "sh transducer type", reg: 60, val: 35}
+  - {label: "sh flow rate unit", reg: 60, val: 49}
+  - {label: "sh flow rate", reg: 60, val: 00}
+  - {label: "sh error code", reg: 60, val: 08}
+  
 
-composite_keys:
-  - label: "set pipe ext diameter"
-    sequence: ["Menu", "1", "1", "Enter"]
-  - label: "set pipe thickness"
-    sequence: ["Menu", "1", "2", "Enter"]
-  - label: "set pipe material"
-    sequence: ["Menu", "1", "4", "Enter"]
-  - label: "show spacing"
-    sequence: ["Menu", "2", "5"]
-    newline: true
-  - label: "show error code"
-    sequence: ["Menu", "0", "8"]
+composite_keys: []
+
 
 action_keys:
-  - {label: "flowRaspail", action: "record", addr: "0001", nbReg: 2, format: "REAL4", recurrence: "10"}
-  - {label: "velocity", action: "record", addr: "0005", nbReg: 2, format: "REAL4", recurrence: "5"}
-  - {label: "resetRaspail", action: "deleteFile", file: "flowRaspail"}
+  - {label: "flowGlobal", action: "record", addr: "0001", nbReg: 2, format: "REAL4", recurrence: "10",file: "flowGlobal.csv"}
+  - {label: "resetGlobal", action: "deleteFile", file: "flowGlobal.csv"} 
+  - {label: "flowRaspail", action: "record", addr: "0001", nbReg: 2, format: "REAL4", recurrence: "10",file: "flowRaspail.csv"}
+  - {label: "resetRaspail", action: "deleteFile", file: "flowRaspail.csv"}
+  - {label: "flowReneHamon", action: "record", addr: "0001", nbReg: 2, format: "REAL4", recurrence: "10", file: "flowReneHamon.csv"}
+  - {label: "resetReneHamon", action: "deleteFile", file: "flowReneHamon.csv"}
+  - {label: "flowLaTour", action: "record", addr: "0001", nbReg: 2, format: "REAL4", recurrence: "10",file: "flowLaTour.csv"}
+  - {label: "resetLaTour", action: "deleteFile", file: "flowLaTour.csv"} 
+  - {label: "flowVictorHugo", action: "record", addr: "0001", nbReg: 2, format: "REAL4", recurrence: "10",file: "flowVictorHugo.csv"}
+  - {label: "resetVictorHugo", action: "deleteFile", file: "flowVictorHugo.csv"} 
+

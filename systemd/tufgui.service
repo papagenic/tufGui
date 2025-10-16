@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 # Path to your project
-WorkingDirectory=/usr/local/bin/TUF2000
+WorkingDirectory=/home/herve/TUF2000
 
 # Path to your virtual environment Python
-ExecStart=/usr/local/bin/TUF2000/TUFvenv/bin/python tufGuiDash.py
+ExecStart=/home/herve/TUF2000/TUFvenv/bin/python tufGuiDash.py
 
 # Optional environment variables
 Environment="PYTHONUNBUFFERED=1"

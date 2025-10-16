@@ -126,9 +126,9 @@ class ModbusWorker(threading.Thread):
 
         try:
             if op == "read":
-                logger.debug(f"modbus read holding register; addr= {addr}, count={nbreg}")
                 response = self.client.read_holding_registers(address=addr, count=nbreg, device_id=1)
                 value = decode_modbus_registers(response.registers, fmt)
+                logger.debug(f"modbus read holding register; addr= {addr}, count={nbreg},value:{value}")
             elif op == "write":
                 value= int(mod.get("value"))
                 logger.debug(f"modbus write register; addr= {addr}, value={value}")
@@ -143,9 +143,12 @@ class ModbusWorker(threading.Thread):
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         if callable(task.callback):
             try:
+                logger.debug(f"[ execute_task] calling callback {get_callback_name(task.callback)}, task_id:{task.task_id},timestamp={ts},value:{value},parameters:{task.parameters}")
                 task.callback(task_id=task.task_id,value=value, timestamp=ts, **task.parameters)
             except Exception as cb_err:
                 logger.error(f"[ModbusWorker] Callback error for {task.task_id}: {cb_err}")
+                task_cb=get_callback_name(task.callback)
+                logger.error(f"[ModbusWorker] task calback:{task_cb}; parameters for {task.task_id}:{task.parameters}")
 
     # ---------------- schedule periodic tasks ----------------
     def create_task(self, task: Task,save: bool = True):
