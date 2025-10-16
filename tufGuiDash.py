@@ -1,84 +1,76 @@
 import dash
 import serial
+import os
 import time
+import struct
+import threading
 from dash import html, dcc, Input, Output, State, ctx
 from pymodbus.client.serial import ModbusSerialClient
+from modbus_worker import Task,ModbusWorker
+from callbacks import register_callback,auto_register_callbacks, CALLBACK_REGISTRY
+from layout import build_layout
+from flask_socketio import SocketIO
+from dash import Dash
+import logging,sys
+import yaml, argparse
+
+
+# --- Parse command-line arguments ---
+parser = argparse.ArgumentParser(description="TUF2000 Dash GUI")
+parser.add_argument(
+    "-c", "--config",
+    default=None,
+    help="Path to configuration file (default: ./config.yaml)"
+)
+args = parser.parse_args()
+# --- Determine config path ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, "config.yaml")
+CONFIG_PATH = args.config or DEFAULT_CONFIG_PATH
+# --- Load configuration ---
+try:
+    with open(CONFIG_PATH, "r") as f:
+        config = yaml.safe_load(f)
+except FileNotFoundError:
+    sys.exit(f"Config file not found: {CONFIG_PATH}")
+
+#parameters
+data_path = config["data_path"]
+
+# Configure root logger
+logging.basicConfig(
+    level=logging.DEBUG,  # show everything, including debug()
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stdout      # send to standard output
+)
+
+#Create a module-level logger
+logger = logging.getLogger(__name__)
+logger.info (f"✅ Using config: {CONFIG_PATH}")
 
 # Setup Modbus client
-ser = serial.Serial(
-    port='/dev/ttyUSB0',
-    baudrate=9600,
-    bytesize=8,
-    parity='N',
-    stopbits=1,
-    timeout=1,
-    exclusive=False  # This is what avoids the locking issue
-)
+ser = serial.Serial(**config["serial"], exclusive=False) # This is what avoids the locking issue
+
 
 # Pass that serial object to pymodbus
-client = ModbusSerialClient(
-    port='/dev/ttyUSB0',     # Required even if we override socket
-    baudrate=9600,
-    bytesize=8,
-    parity='N',
-    stopbits=1,
-    timeout=1
-)
+client = ModbusSerialClient(**config["serial"])
 client.socket = ser  # Attach the serial connection manually
 client.connect()
 
 # Define keyboard layout
-baseKeys = [
-    {"label": "Menu", "reg": 59, "val": 60},
-    {"label": "Enter", "reg": 59, "val": 61},
-    {"label": "Up", "reg": 59, "val": 62},
-    {"label": "down", "reg": 59, "val": 63},
-    {"label": "0", "reg": 59, "val": 48},
-    {"label": "1", "reg": 59, "val": 49},
-    {"label": "2", "reg": 59, "val": 50},
-    {"label": "3", "reg": 59, "val": 51},
-    {"label": "4", "reg": 59, "val": 52},
-    {"label": "5", "reg": 59, "val": 53},
-    {"label": "6", "reg": 59, "val": 54},
-    {"label": "7", "reg": 59, "val": 55},
-    {"label": "8", "reg": 59, "val": 56},
-    {"label": "9", "reg": 59, "val": 57},
-    {"label": ".", "reg": 59, "val": 58},
-]
+baseKeys = config["base_keys"]
 
-functionKeys= [
-    {"label": "Pipe ext Diam", "reg": 60, "val": 17},
-    {"label": "Pipe Thickness", "reg": 60, "val": 18},
-    {"label": "Pipe material", "reg": 60, "val": 20},
-]
+functionKeys= config["function_keys"]
 
 # Composite buttons
-composite_keys = [
-    {
-        "label": "set pipe ext diameter",
-        "sequence": ["Menu", "1", "1", "Enter"]
-    },
-    {
-        "label": "set pipe thickness",
-        "sequence": ["Menu", "1", "2", "Enter"]
-    },
-{
-        "label": "set pipe material",
-        "sequence": ["Menu", "1", "4", "Enter"]
-    },
-    {
-        "label": "show spacing",
-        "sequence": ["Menu", "2", "5"],
-        "newline" : True,
-    },
-    {
-        "label": "show error code",
-        "sequence": ["Menu", "0", "8"],
-    },
-]
+composite_keys = config["composite_keys"]
 
+# Composite buttons
+action_keys = config["action_keys"]
 # Initialize Dash app
-app = dash.Dash(__name__)
+app = Dash(__name__, suppress_callback_exceptions=True)
+socketio = SocketIO(app.server, cors_allowed_origins="*")
+
 meta_tags=[
         {"name": "viewport", "content": "width=device-width, initial-scale=1.0"}
     ]
@@ -88,61 +80,133 @@ app.title = "Modbus Virtual Keyboard"
 composite_button_rows = []
 current_row = []
 
-for i, k in enumerate(composite_keys):
-    btn = html.Button(k["label"], id={'type': 'composite', 'index': i}, n_clicks=0)
+# --- Tracking threads and states ---
+active_tasks = {} # key: index, value: threading.Event
 
-    # If this button should start on a new line
-    if k.get("newline") and current_row:
-        composite_button_rows.append(
-            html.Div(current_row, style={"display": "flex", "gap": "10px", "marginBottom": "10px"})
-        )
-        current_row = []
+#define worker but do not start items
+worker = ModbusWorker(client,state_file=os.path.join(data_path, "TUFState"))
 
-    current_row.append(btn)
+# Custom HTML template to include the Socket.IO client library
+app.index_string = """
+<!DOCTYPE html>
+<html>
+  <head>
+    {%metas%}
+    <title>{%title%}</title>
+    {%favicon%}
+    {%css%}
+    <!-- ✅ Add the Socket.IO client script here -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  </head>
+  <body>
+    {%app_entry%}
+    <footer>
+      {%config%}
+      {%scripts%}
+      {%renderer%}
+    </footer>
+  </body>
+</html>
+"""
 
-# Add any remaining buttons
-if current_row:
-    composite_button_rows.append(
-        html.Div(current_row, style={"display": "flex", "gap": "10px", "marginBottom": "10px"})
+# Build App layout
+app.layout = build_layout(baseKeys, functionKeys, composite_keys, action_keys)
+
+#-----------callback callled after modbus write----------------
+@register_callback("on_write_done")
+def on_write_done(task_id, value, timestamp, **kwargs):
+    target_id = kwargs.get("target_id")
+    logger.debug(f"; on_write_done: task_id={task_id},timestamp:{timestamp},target_id= {target_id},value={value}")
+    
+    ## write data to a task specific log file
+    try:
+        log_dir = "logs"
+        os.makedirs(data_path, exist_ok=True)
+        file_path = os.path.join(data_path, f"{task_id}")
+
+        with open(file_path, "a", encoding="utf-8") as f:
+            f.write(f"{timestamp},{value}\n")
+
+    except Exception as e:
+        logger.error(f"Failed to write data for task {task_id}: {e}")
+        
+    #now send status line to be displayed in the browser
+    message = {
+        "target_id": target_id,
+        "content": f"[task:{task_id}--{timestamp}] Modbus result: {value}"
+    }
+    # Send this to the client (frontend) through a socket
+    socketio.emit("update_element", message)
+    
+#--------------record action; create or stop task------------------------
+def record_action(index, **params):
+
+    # Validate required params
+    missing = [k for k in ("label","addr", "nbReg", "format", "recurrence") if params.get(k) is None]
+    if missing:
+        logger.error(f"[record_action] Missing parameters {missing} for button '{label}'")
+        return "inactive"
+    label = params.get("label", f"button_{index}")
+    addr = params.get("addr")
+    nbReg = params.get("nbReg")
+    format = params.get("format")
+    recurrence = params.get("recurrence")
+    task_id = f"{label.replace(' ', '_')}"
+
+    #now see if needed to start or stop a task
+    if task_id in worker.tasks:
+        # Stop existing task
+        worker.delete_task(worker.tasks[task_id])
+        logger.info(f"[record_action] Stopped recording: {label}")
+        return "inactive"
+
+    # Start a new recording task
+    task = Task(
+        task_id=task_id,
+        modbus_param={
+            "op": "read",
+            "addr": int(addr),
+            "nbreg": int(nbReg),
+            "format": format
+        },
+        recurrence=float(recurrence),
+        callback=on_write_done,
+        parameters={"target_id": f"status_{index}"}
     )
+    worker.create_task(task)
+    logger.info(f"[record_action] Started recording: {label}")
+    return "active"
+#-----------callback to delete a record file------------------
+def deleteFile_action(index, **params):
+    # Validate required params
+    missing = [k for k in ("label","file") if params.get(k) is None]
+    if missing:
+        logger.error(f"[record_action] Missing parameters {missing} for button '{label}'")
+        return "inactive"
+    file= params.get("file")
+    label = params.get("label", f"button_{index}")
 
-# App layout
-app.layout = html.Div([
-    html.H2("Modbus Virtual Keyboard"),
+    if not file:
+        logger.error(f"[deleteFile_action] Missing 'file' parameter for button '{label}'")
+        return "inactive"
+    file_path = os.path.join(data_path, file)
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info(f"[deleteFile_action] Deleted file: {file_path}")
+        else:
+            logger.warning(f"[deleteFile_action] File not found: {file_path}")
+    except Exception as e:
+        logger.error(f"[deleteFile_action] Error deleting file '{file_path}': {e}")
 
-    html.Div([
-        html.Button(k["label"], id={'group': 'base', 'index': i}, n_clicks=0)
-        for i, k in enumerate(baseKeys)
-    ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(100px, 1fr))', 'gap': '10px'}),
-
-    html.Hr(),
-    html.H3("read actions"),
-
-    html.Div([
-        *[
-            html.Button(k["label"], id={'group': 'function', 'index': i}, n_clicks=0)
-            for i, k in enumerate(functionKeys)
-        ]
-    ], style={'display': 'grid', 'gridTemplateColumns': 'repeat(auto-fit, minmax(100px, 1fr))', 'gap': '10px'}),
-
-    html.Hr(),
-
-    html.Div([
-        html.H3("Composite Actions"),
-        *composite_button_rows,  # Unpack all rows
-        html.Hr(),
-        html.Div(id="response", style={"marginTop": "10px", "color": "blue"}),
-    ]),
-
-], style={'padding': '20px'})
-
-# Callback for button presses
+    return "inactive"
+#-----------Callback for base and function button press----------
 @app.callback(
     Output("response", "children"),
     Input({'group': dash.ALL, 'index': dash.ALL}, 'n_clicks'),
     prevent_initial_call=True
 )
-def on_key_press(n_clicks):
+def on_base_or_function_key_press(n_clicks):
     triggered = dash.callback_context.triggered_id
     if not triggered:
         return ""
@@ -153,16 +217,23 @@ def on_key_press(n_clicks):
     else:
         key = functionKeys[index]
     reg, val = key["reg"], key["val"]
+    logger.debug(f"; on_base_or_function_key_press addr= {reg}, value={val}")
+    #create a one time task to perform this
+    task = Task(
+        task_id=f"write_{group}_{index}",
+        modbus_param={"op": "write", "addr": reg-1, "value": val},
+        callback=on_write_done,
+        parameters={"target_id": "response"},  # element to update
+    )
+    worker.create_task(task)
 
-    result = client.write_register(reg - 1, val, device_id=1)
-    return f"Sent: Reg {reg} = {val} → {result}"
-
+#---------call back for composite buttons (key sequence)------------
 @app.callback(
     Output("response", "children", allow_duplicate=True),
     Input({'type': 'composite', 'index': dash.ALL}, 'n_clicks'),
     prevent_initial_call=True
 )
-def on_composite_pressed(n_clicks):
+def on_composite_key_pressed(n_clicks):
     triggered = ctx.triggered_id
     index = triggered["index"]
     composite = composite_keys[index]
@@ -172,17 +243,89 @@ def on_composite_pressed(n_clicks):
     for label in composite["sequence"]:
         key = next((k for k in baseKeys if k["label"].lower() == label.lower()), None)
         if key:
-            result = client.write_register(key["reg"] - 1, key["val"], device_id=1)
-            output_log.append(f"{key['label']} → Reg {key['reg']} = {key['val']}")
-            time.sleep(0.3)  # small delay between commands
-        else:
-            output_log.append(f"[Error: '{label}' not found in base Keys]")
+            reg, val = key["reg"], key["val"]
+            #create a one time task to perform this
+            task = Task(
+                task_id=f"write_{index}",
+                modbus_param={"op": "write", "addr": reg- 1, "value": val},
+                callback=on_write_done,
+                parameters={"target_id": "response"},  # element to update
+            )
+            worker.create_task(task)
 
     return "Composite Sent:<br>" + "<br>".join(output_log)
 
+ #--- Callback to update button colors and perform  recording  actions  for register keys ---
+@app.callback(
+    Output({'type': 'rec-btn', 'index': dash.ALL}, 'style'),
+    Input("url", "pathname"),  # Fires on page load
+    Input({'type': 'rec-btn', 'index': dash.ALL}, 'n_clicks'),  # Fires on clicks
+    prevent_initial_call=False
+)
+def handle_actions_buttons(pathname, n_clicks_list):
+    
+    # callback handles both:initializing button colors at page load
+    # and toggling a recording task when a button is clicked
+    # Base styles (default colors)
+    
+    styles = [{"backgroundColor": "lightgray"} for _ in action_keys]
+
+    # --- Determine what triggered this callback ---
+    trigger = ctx.triggered_id
+
+    # --- Handle button click to manage associated tasks  ---
+    if isinstance(trigger, dict) and trigger.get("type") == "rec-btn":
+        index = trigger["index"]
+        key = action_keys[index]
+        label = key.get("label", f"button_{index}")
+
+        action = key.get("action")
+        if not action:
+            logger.error(f"[handle_rec_buttons] Missing 'action' key for button '{label}'.")
+            return styles
+
+        # Build the function name dynamically
+        func_name = f"{action}_action"
+        action_func = globals().get(func_name)
+
+        if not callable(action_func):
+            logger.error(f"[handle_rec_buttons] No handler found for action '{action}' (expected function '{func_name}').")
+            return styles
+
+        # Prepare arguments: pass all key fields except 'action'
+        params = {k: v for k, v in key.items() if k != "action"}
+
+        try:
+            logger.debug(f"[handle_rec_buttons] Executing action '{action}' for '{label}' with params={params}")
+            result = action_func(index=index, **params)  # Call dynamically
+        except Exception as e:
+            logger.error(f"[handle_rec_buttons] Error executing action '{action}' for '{label}': {e}")
+            return styles
+
+    #refresh the style of all the buttons
+    #this part is executed when the page load of when a button is pressed
+    active_ids = worker.get_active_task_ids()
+    queue_size = worker.queue_size()
+    logger.debug(f"[handle_rec_buttons] active_ids: {active_ids} ; worker queue size:{queue_size}")
+    for i, key in enumerate(action_keys):
+        task_id = f"{key['label'].replace(' ', '_')}"
+        if task_id in active_ids:
+            logger.debug(f"[handle_rec_buttons] action key: {task_id} is green ")
+            styles[i] = {"backgroundColor": "lightgreen"}
+        else:
+            styles[i] = {"backgroundColor": "lightgray"}
+    return styles
+
+
+        
+        
+# 1️⃣ Automatically register all callbacks from your callbacks module
+# this create association betwen callbacks names and calback functions
+#needed to save and restore worker states
+auto_register_callbacks(globals())
+print("Registered callbacks at startup:", CALLBACK_REGISTRY.keys())
+worker.start()
+
 # Run server
 if __name__ == "__main__":
-    app.run(
-      host="0.0.0.0",
-      port=8050,
-      debug=True)
+    socketio.run(app.server, host="0.0.0.0", port=8050, debug=True,allow_unsafe_werkzeug=True)
