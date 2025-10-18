@@ -41,9 +41,9 @@ data_path = config["data_path"]
 logging.basicConfig(
     level=logging.DEBUG,  # show everything, including debug()
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    #stream=sys.stdout # send to standard output
-    filename=config["log_file"],  # full path to log file
-    filemode="a"  # append mode (use 'w' to overwrite each run)
+    stream=sys.stdout # send to standard output
+    #filename=config["log_file"],  # full path to log file
+    #filemode="a"  # append mode (use 'w' to overwrite each run)
 )
 
 #Create a module-level logger
@@ -98,7 +98,7 @@ app.index_string = """
     {%favicon%}
     {%css%}
     <!-- ✅ Add the Socket.IO client script here -->
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="/assets/socket.io.min.js"></script>
   </head>
   <body>
     {%app_entry%}

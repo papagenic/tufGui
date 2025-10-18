@@ -32,11 +32,14 @@ function_keys:
   - {label: "sh Pipe Thickness", reg: 60, val: 18}
   - {label: "sh Pipe material", reg: 60, val: 20}
   - {label: "sh spacing", reg: 60, val: 37}
-  - {label: "sh Pipe material", reg: 60, val: 20}
+  - {label: "save/load param", reg: 60, val: 39}
   - {label: "sh fluid", reg: 60, val: 32}
   - {label: "sh transducer type", reg: 60, val: 35}
+  - {label: "sh mount method", reg: 60, val: 36}
   - {label: "sh flow rate unit", reg: 60, val: 49}
   - {label: "sh flow rate", reg: 60, val: 00}
+  - {label: "today tot flow", reg: 60, val: 09}
+  - {label: "start/stop totalizer", reg: 60, val: 52}
   - {label: "sh error code", reg: 60, val: 08}
   
 

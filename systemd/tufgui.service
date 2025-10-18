@@ -13,8 +13,8 @@ ExecStart=/home/herve/TUF2000/TUFvenv/bin/python tufGuiDash.py
 Environment="PYTHONUNBUFFERED=1"
 
 # If you want logs
-StandardOutput=journal
-StandardError=journal
+StandardOutput=append:/var/log/TUF2000/tuf2000.log
+StandardError=append:/var/log/TUF2000/tuf2000.log
 
 # Run as a non-root user (recommended)
 User=herve

@@ -48,7 +48,7 @@ def build_layout(baseKeys, functionKeys, composite_keys, register_keys):
     }),
 
     html.Hr(),
-    html.H3("read actions"),
+    html.H3("set/show actions"),
 
     # Function keys
     html.Div([
